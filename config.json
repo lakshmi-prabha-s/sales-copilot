@@ -1,0 +1,8 @@
+{
+    "data_dir": "data",
+    "index_dir": "faiss_index",
+    "embedding_model": "models/gemini-embedding-001",
+    "llm_model": "models/gemini-2.5-flash",
+    "chunk_size": 1000,
+    "chunk_overlap": 200
+}
