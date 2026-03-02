@@ -43,25 +43,35 @@ class SalesCopilot:
         index_dir = CONFIG["index_dir"]
         data_dir = CONFIG["data_dir"]
 
+        def _create_empty_store(message):
+            print(message)
+            return FAISS.from_texts(["Initialization document"], self.embeddings, metadatas=[{"source": "init"}])
+
         if os.path.exists(index_dir):
             print("Loading existing vector store...")
             # allow_dangerous_deserialization is required for local FAISS loading in newer LangChain versions
             return FAISS.load_local(index_dir, self.embeddings, allow_dangerous_deserialization=True)
         
         print(f"Initializing new vector store from '{data_dir}' directory...")
-        if not os.path.exists(data_dir) or not os.listdir(data_dir):
-            print(f"Warning: No data found in '{data_dir}'. Start by ingesting a file.")
-            # Initialize empty vector store with a dummy document to establish schema
-            return FAISS.from_texts(["Initialization document"], self.embeddings, metadatas=[{"source": "init"}])
+        if not os.path.exists(data_dir):
+            return _create_empty_store(f"Warning: '{data_dir}' does not exist. Start by ingesting a file.")
+
+        txt_files = [f for f in os.listdir(data_dir) if f.lower().endswith(".txt")]
+        if not txt_files:
+            return _create_empty_store(f"Warning: No .txt transcripts found in '{data_dir}'. Start by ingesting a file.")
 
         loader = DirectoryLoader(data_dir, glob="*.txt", loader_cls=TextLoader)
         documents = loader.load()
+        if not documents:
+            return _create_empty_store(f"Warning: No readable .txt transcripts found in '{data_dir}'. Start by ingesting a file.")
         
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=CONFIG["chunk_size"], 
             chunk_overlap=CONFIG["chunk_overlap"]
         )
         chunks = text_splitter.split_documents(documents)
+        if not chunks:
+            return _create_empty_store(f"Warning: Transcript files in '{data_dir}' produced no chunks. Start by ingesting a file.")
         
         vectorstore = FAISS.from_documents(chunks, self.embeddings)
         vectorstore.save_local(index_dir)
@@ -75,6 +85,13 @@ class SalesCopilot:
             # We explicitly inject the source filename into the text context so the LLM can cite it
             formatted.append(f"--- SOURCE: {os.path.basename(source)} ---\n{doc.page_content}")
         return "\n\n".join(formatted)
+
+    def has_indexed_data(self):
+        """Returns True when at least one non-initialization transcript exists in the store."""
+        for doc in self.vectorstore.docstore._dict.values():
+            if doc.metadata.get("source") != "init":
+                return True
+        return False
 
     def _build_rag_chain(self):
         """Constructs the LangChain Expression Language (LCEL) chain for RAG."""
@@ -159,6 +176,8 @@ def main():
     copilot = SalesCopilot()
     print("System ready. Type 'quit' to exit.")
     print("Example commands: 'list my call ids', 'ingest a new call transcript from <path>', or just ask a question.")
+    if not copilot.has_indexed_data():
+        print("No transcript data found. Please upload a document using: ingest a new call transcript from <path>")
     
     while True:
         try:
@@ -177,6 +196,9 @@ def main():
                 path = user_input.split('from', 1)[1].strip()
                 print(copilot.ingest_transcript(path))
             else:
+                if not copilot.has_indexed_data():
+                    print("No transcript data found. Please upload a document using: ingest a new call transcript from <path>")
+                    continue
                 print("Thinking...")
                 response = copilot.ask(user_input)
                 print("\n" + response)
